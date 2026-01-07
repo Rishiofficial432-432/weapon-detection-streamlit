@@ -1,10 +1,12 @@
+import os
+os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+
 import streamlit as st
 from ultralytics import YOLO
 import cv2
 import numpy as np
 from PIL import Image
 import urllib.request
-import os
 
 st.set_page_config(
     page_title="🔫 Weapon Detection + Thermal",
@@ -16,184 +18,276 @@ st.set_page_config(
 st.markdown("""
 <style>
 .big-font {font-size:30px !important; font-weight:bold; color:#FF4B4B;}
-.thermal-badge {background-color:#FF6B6B; padding:10px; border-radius:5px;}
+.thermal-badge {background-color:#FF8B66; padding:10px; border-radius:10px; border:2px solid #FF4B4B;}
+.stButton>button {width: 100%;}
 </style>
 """, unsafe_allow_html=True)
 
 @st.cache_resource
 def load_model():
-    """Load weapon detection model with caching"""
+    """Load weapon detection model with caching and priority"""
     weapon_model_url = "https://github.com/Musawer1214/Weapon-Detection-YOLO/raw/main/weapon_detection_best.pt"
     weapon_model_path = "weapon_best.pt"
+    custom_model_path = "custom_model_v2.pt"
     
-    if not os.path.exists(weapon_model_path):
+    model = None
+    model_source = "None"
+
+    # Priority 1: Custom Trained Model (Local)
+    if os.path.exists(custom_model_path):
         try:
-            with st.spinner('🔄 Downloading specialized weapon detection model...'):
-                urllib.request.urlretrieve(weapon_model_url, weapon_model_path)
-            st.success("✅ Model downloaded successfully!")
-        except:
-            st.warning("⚠️ Using YOLOv8n fallback model...")
-            weapon_model_path = 'yolov8n.pt'
+            model = YOLO(custom_model_path)
+            model_source = "Custom Trained Model (Verified)"
+        except Exception as e:
+            st.warning(f"Failed to load custom model: {e}")
+
+    # Priority 2: Pre-trained GitHub Model
+    if model is None:
+        if not os.path.exists(weapon_model_path):
+            with st.spinner("� Downloading specialized weapon detection model..."):
+                try:
+                    urllib.request.urlretrieve(weapon_model_url, weapon_model_path)
+                except:
+                    pass
+        
+        if os.path.exists(weapon_model_path):
+            try:
+                model = YOLO(weapon_model_path)
+                model_source = "GitHub Pre-trained Model"
+            except:
+                pass
+
+    # Priority 3: Fallback YOLOv8n
+    if model is None:
+        st.warning("⚠️ Using standard YOLOv8n fallback model (Low Accuracy for Weapons)")
+        model = YOLO('yolov8n.pt')
+        model_source = "YOLOv8n Fallback"
     
-    model = YOLO(weapon_model_path)
-    return model
+    return model, model_source
 
-# Weapon class mapping (for proper labeling)
-WEAPON_CLASSES = {
-    'pistol': '🔫 Handgun/Pistol',
-    'rifle': '🎯 Rifle',
-    'knife': '🔪 Knife',
-    'gun': '🔫 Gun',
-    'firearm': '🔫 Firearm'
-}
-
-def apply_thermal_effect(image_array):
-    """Convert image to thermal-like visualization"""
-    # Convert to grayscale first
-    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-    # Apply thermal colormap
-    thermal = cv2.applyColorMap(gray, cv2.COLORMAP_JET)
-    # Convert back to RGB
+def convert_to_thermal(image):
+    """Convert normal image to thermal-style image (Simulated)"""
+    img_array = np.array(image)
+    if len(img_array.shape) == 2: # Already grayscale
+        gray = img_array
+    else:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    
+    blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(blurred)
+    thermal = cv2.applyColorMap(enhanced, cv2.COLORMAP_JET)
     thermal_rgb = cv2.cvtColor(thermal, cv2.COLOR_BGR2RGB)
     return thermal_rgb
 
-def detect_weapons_with_thermal(image, confidence, show_thermal):
-    """Detect weapons and optionally apply thermal imaging"""
-    if image is None:
-        return None, "⚠️ Please upload an image"
-    
-    # Convert PIL to numpy array
-    img_array = np.array(image)
-    
-    # Apply thermal effect if requested
-    if show_thermal:
-        img_array = apply_thermal_effect(img_array)
-    
-    # Run weapon detection
-    model = load_model()
-    results = model(img_array, conf=confidence)
-    result = results[0]
-    
-    # Get annotated image
-    img_with_boxes = result.plot()
-    img_rgb = cv2.cvtColor(img_with_boxes, cv2.COLOR_BGR2RGB)
-    
-    # Build detection summary
-    boxes = result.boxes
-    detection_text = f"**🎯 Total Detections: {len(boxes)}**\n\n"
-    
-    if len(boxes) > 0:
-        for i, box in enumerate(boxes):
-            conf = box.conf[0].item()
-            cls = int(box.cls[0].item())
-            cls_name = result.names[cls]
-            
-            # Map to weapon-friendly names
-            display_name = WEAPON_CLASSES.get(cls_name.lower(), f"⚠️ {cls_name.upper()}")
-            detection_text += f"**{i+1}. {display_name}**\n"
-            detection_text += f"   - Confidence: {conf:.1%}\n"
-            detection_text += f"   - Class: {cls_name}\n\n"
-    else:
-        detection_text += f"✅ No weapons detected (confidence >= {confidence:.0%})\n"
-        detection_text += "🔹 Try lowering the threshold or upload a different image."
-    
-    return img_rgb, detection_text
+def mse(imageA, imageB):
+    # the 'Mean Squared Error' between the two images is the
+    # sum of the squared difference between the two images;
+    # NOTE: the two images must have the same dimension
+    err = np.sum((imageA.astype("float") - imageB.astype("float")) ** 2)
+    err /= float(imageA.shape[0] * imageA.shape[1])
+    return err
 
-# Main app
-st.markdown('<p class="big-font">🛡️ Professional Weapon Detection System</p>', unsafe_allow_html=True)
-st.markdown("**🔥 With Thermal Imaging Capability**")
-st.markdown("---")
+def detect_opencv_anomalies(image):
+    """
+    OpenCV Fallback: Detect anomalies that might be potential concealed objects.
+    Logic: In thermal, hidden objects often appear as 'cold' (darker) spots on a 'warm' body 
+    OR 'hot' spots depending on the environment.
+    We'll look for significant contours that break the smooth localized texture.
+    """
+    img_array = np.array(image)
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    
+    # 1. Morphological Gradient (Edges/Texture changes)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    gradient = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
+    
+    # 2. Thresholding to find high gradients (edges of objects)
+    _, thresh = cv2.threshold(gradient, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 3. Find contours
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    detections = []
+    annotated_img = img_array.copy()
+    
+    min_area = 500 # Minimum area to be considered an object
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > min_area:
+            x, y, w, h = cv2.boundingRect(cnt)
+            
+            # Filter distinct shapes (weapons usually not extremely elongated or huge)
+            aspect_ratio = float(w)/h
+            if 0.2 < aspect_ratio < 5.0: 
+                cv2.rectangle(annotated_img, (x, y), (x+w, y+h), (0, 255, 255), 2)
+                cv2.putText(annotated_img, "Anomaly", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                
+                detections.append({
+                    'class': 'anomaly (opencv)',
+                    'confidence': 0.0, # N/A
+                    'bbox': [x, y, x+w, y+h]
+                })
+                
+    return annotated_img, detections
+
+def detect_weapons_hybrid(model, image, confidence_threshold=0.3):
+    """Run Hybrid (AI + OpenCV) detection"""
+    
+    # 1. AI Detection
+    results = model(image, conf=confidence_threshold)
+    ai_annotated = results[0].plot()
+    
+    ai_detections = []
+    for box in results[0].boxes:
+        cls_id = int(box.cls[0])
+        class_name = results[0].names[cls_id]
+        
+        # Filter: If model is 'custom', classes are 0:Handgun, 1:Person
+        # We generally want to ignore 'Person' if looking for weapons, unless user wants both.
+        # User said "Weapon detection", so let's highlight Handgun primarily.
+        
+        if class_name.lower() in ['person', 'man', 'woman']:
+             # Optional: don't count person as a 'threat'
+             pass
+        
+        detection = {
+            'class': class_name,
+            'confidence': float(box.conf[0]),
+            'bbox': box.xyxy[0].tolist(),
+            'source': 'AI'
+        }
+        ai_detections.append(detection)
+    
+    # 2. OpenCV Fallback (Only if AI finds nothing or user wants extra check)
+    cv_annotated, cv_detections = detect_opencv_anomalies(image)
+    
+    # Combine logic:
+    # If AI found something, prefer AI visualization but maybe show CV count?
+    # For now, let's return AI annotated if AI found anything. 
+    # If AI empty, return CV annotated.
+    
+    final_annotated = ai_annotated
+    final_detections = ai_detections
+    
+    if not ai_detections:
+        final_annotated = cv_annotated
+        final_detections = cv_detections
+    return final_annotated, final_detections
+
+def process_video(video_path, model, confidence_threshold):
+    """Process video file frame by frame"""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None, "Error opening video"
+
+    # Video properties
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    
+    # Output setup (Use mp4v for basic compatibility, or just process select frames for display)
+    # Streamlit video playback often requires H.264 which is hard with basic OpenCV.
+    # So we will process frames and show a progress bar, then maybe converting to GIF or showing keyframes.
+    # OR better: Show a "Live" processing view using st.image placeholder.
+    
+    st_frame = st.empty()
+    st_progress = st.progress(0)
+    
+    frame_count = 0
+    detections_summary = 0
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Convert BGR (OpenCV) to RGB (Streamlit/PIL) logic
+        # But wait, our pipeline is: Input -> Thermal Conversion -> Detection
+        
+        # 1. Convert to RGB for Thermal function
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # 2. Thermal Conversion
+        thermal_rgb = convert_to_thermal(frame_rgb)
+        
+        # 3. Detect
+        annotated_frame, frame_detections = detect_weapons_hybrid(model, thermal_rgb, confidence_threshold)
+        
+        if frame_detections:
+            detections_summary += len(frame_detections)
+        
+        # 4. Display Live
+        st_frame.image(annotated_frame, caption=f"Processing Frame {frame_count}/{total_frames}", use_container_width=True)
+        
+        frame_count += 1
+        if total_frames > 0:
+            st_progress.progress(min(frame_count / total_frames, 1.0))
+            
+    cap.release()
+    st_progress.empty()
+    return detections_summary
+
+# Main UI
+st.markdown('<p class="big-font">🔫 Weapon Detection System</p>', unsafe_allow_html=True)
+
+# Load model
+model, source_name = load_model()
+st.caption(f"🤖 Active Model: **{source_name}**")
 
 # Sidebar
-with st.sidebar:
-    st.header("⚙️ Settings")
-    confidence = st.slider(
-        "Detection Confidence Threshold",
-        min_value=0.1,
-        max_value=1.0,
-        value=0.25,
-        step=0.05,
-        help="Higher values = more confident detections only"
-    )
-    
-    thermal_checkbox = st.checkbox(
-        "🌡️ Enable Thermal Imaging",
-        value=False,
-        help="Apply thermal colormap for heat signature visualization"
-    )
-    
-    st.markdown("---")
-    st.header("📊 Model Info")
-    st.info("""
-    **Model**: YOLOv8 Weapon Detection
-    **Classes**: Guns, Rifles, Knives
-    **Accuracy**: High precision
-    **Thermal**: OpenCV colormap
-    """)
+st.sidebar.header("⚙️ Settings")
+confidence = st.sidebar.slider("Confidence Threshold", 0.05, 1.0, 0.25, 0.05)
+enable_opencv = st.sidebar.checkbox("Enable OpenCV Fallback", value=True, help="Use Computer Vision to detect anomalies if AI fails")
 
-# Main content
-col1, col2 = st.columns([1, 1])
+uploaded_file = st.file_uploader("photos", type=['jpg', 'jpeg', 'png', 'mp4'], label_visibility="hidden")
 
-with col1:
-    st.subheader("📤 Upload Image")
-    uploaded_file = st.file_uploader(
-        "Choose an image...",
-        type=["jpg", "jpeg", "png"],
-        help="Upload an image to detect weapons"
-    )
-
-if uploaded_file is not None:
-    # Load image
-    image = Image.open(uploaded_file)
+if uploaded_file:
+    # Check file type
+    file_type = uploaded_file.type.split('/')[0]
     
-    # Display original image
-    with col1:
-        st.image(image, caption="Original Image", use_container_width=True)
-    
-    # Run detection
-    with st.spinner("🔍 Running detection..."):
-        annotated_img, detection_text = detect_weapons_with_thermal(
-            image, confidence, thermal_checkbox
-        )
-    
-    # Display results
-    with col2:
-        st.subheader("🎯 Detection Results")
-        if annotated_img is not None:
-            st.image(annotated_img, caption="Detected Objects", use_container_width=True)
-    
-    # Detection summary
-    st.markdown("---")
-    st.subheader("📋 Detection Summary")
-    st.markdown(detection_text)
-else:
-    st.info("👈 Please upload an image to begin detection")
-    
-    # Demo info
-    st.markdown("---")
-    st.subheader("🚀 How to Use")
-    col_info1, col_info2, col_info3 = st.columns(3)
-    
-    with col_info1:
-        st.markdown("""
-        **1. Upload Image** 📤
+    if file_type == 'video' or uploaded_file.name.endswith('.mp4'):
+        st.info("🎥 Processing Video Input...")
         
-        Upload any image containing weapons.
-        """)
-    
-    with col_info2:
-        st.markdown("""
-        **2. Adjust Settings** ⚙️
+        # Save temp file
+        import tempfile
+        tfile = tempfile.NamedTemporaryFile(delete=False) 
+        tfile.write(uploaded_file.read())
         
-        Fine-tune confidence threshold.
-        """)
-    
-    with col_info3:
-        st.markdown("""
-        **3. View Results** 🎯
+        try:
+            total_threats = process_video(tfile.name, model, confidence)
+            
+            if total_threats > 0:
+                st.error(f"🚨 VIDEO PROCESSING COMPLETE: Found {total_threats} threats across frames.")
+            else:
+                st.success("✅ Video Clean: No threats detected.")
+        except Exception as e:
+            st.error(f"Error processing video: {e}")
+        finally:
+            # Cleanup
+            tfile.close()
+            # os.unlink(tfile.name) # Keep for now or delete
+            
+    else:
+        # Image Processing
+        image = Image.open(uploaded_file)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
         
-        See detected weapons with bounding boxes.
-        """)
+        # Process
+        with st.spinner("Running detection algorithms..."):
+            thermal_img = convert_to_thermal(image)
+            annotated_img, detections = detect_weapons_hybrid(model, thermal_img, confidence)
+            
+            st.markdown("### 🎯 Results")
+            st.image(annotated_img, caption=f"Processed Image ({len(detections)} detections)", use_container_width=True)
+            
+            if detections:
+                st.error(f"🚨 FOUND {len(detections)} POTENTIAL THREATS")
+                for d in detections:
+                    source_badge = "🤖 AI" if d.get('source') == 'AI' else "👁️ CV"
+                    st.write(f"**{source_badge}**: {d['class']} ({d['confidence']:.2f})")
+            else:
+                st.success("✅ Area Clear")
 
-st.markdown("---")
-st.caption("Built with Streamlit & YOLOv8 | Professional Weapon Detection Demo")

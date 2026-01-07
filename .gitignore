@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.DS_Store
+datasets/
+Thermal Image Dataset for Concealed Handgun Detection/
+UCLM_Thermal_Imaging_Dataset/
+runs/
+*.mp4
