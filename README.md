@@ -1,3 +1,15 @@
+---
+title: Weapon Detection System
+emoji: 🔫
+colorFrom: red
+colorTo: gray
+sdk: streamlit
+sdk_version: 1.32.0
+app_file: app_thermal.py
+pinned: false
+license: mit
+---
+
 # 🔫 Weapon Detection System (Thermal & Hybrid)
 
 A state-of-the-art **Streamlit** application designed to detect concealed weapons in images and videos. This system utilizes a **Hybrid Detection Pipeline**, combining a custom-trained **YOLOv8 AI Interaction Model** with **OpenCV Computer Vision** algorithms to identify potential threats in thermal-simulated environments.
